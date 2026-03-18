@@ -66,6 +66,8 @@ class Hyperparameters:
     model_dim = int(os.environ.get("MODEL_DIM", 512))
     num_heads = int(os.environ.get("NUM_HEADS", 8))
     mlp_mult = int(os.environ.get("MLP_MULT", 2))
+    bigram_hash_vocab = int(os.environ.get("BIGRAM_HASH_VOCAB", 0))
+    bigram_hash_bos_id = int(os.environ.get("BIGRAM_HASH_BOS_ID", 1))
     tie_embeddings = bool(int(os.environ.get("TIE_EMBEDDINGS", "1")))
     rope_base = float(os.environ.get("ROPE_BASE", 10000.0))
     logit_softcap = float(os.environ.get("LOGIT_SOFTCAP", 30.0))
@@ -85,6 +87,7 @@ class Hyperparameters:
     beta2 = float(os.environ.get("BETA2", 0.95))
     adam_eps = float(os.environ.get("ADAM_EPS", 1e-8))
     grad_clip_norm = float(os.environ.get("GRAD_CLIP_NORM", 0.0))
+    post_step_weight_clip = float(os.environ.get("POST_STEP_WEIGHT_CLIP", 0.0))
 
 # -----------------------------
 # MUON OPTIMIZER 
@@ -654,6 +657,8 @@ class GPT(nn.Module):
         num_heads: int,
         num_kv_heads: int,
         mlp_mult: int,
+        bigram_hash_vocab: int,
+        bigram_hash_bos_id: int,
         tie_embeddings: bool,
         tied_embed_init_std: float,
         logit_softcap: float,
@@ -667,6 +672,9 @@ class GPT(nn.Module):
         self.tied_embed_init_std = tied_embed_init_std
         self.logit_softcap = logit_softcap
         self.tok_emb = nn.Embedding(vocab_size, model_dim)
+        self.bigram_hash_vocab = bigram_hash_vocab
+        self.bigram_hash_bos_id = bigram_hash_bos_id
+        self.bigram_emb = nn.Embedding(bigram_hash_vocab, model_dim) if bigram_hash_vocab > 0 else None
         self.num_encoder_layers = num_layers // 2
         self.num_decoder_layers = num_layers - self.num_encoder_layers
         self.num_skip_weights = min(self.num_encoder_layers, self.num_decoder_layers)
@@ -693,12 +701,24 @@ class GPT(nn.Module):
     def _init_weights(self) -> None:
         if self.tie_embeddings:
             nn.init.normal_(self.tok_emb.weight, mean=0.0, std=self.tied_embed_init_std)
+        if self.bigram_emb is not None:
+            nn.init.normal_(self.bigram_emb.weight, mean=0.0, std=self.tied_embed_init_std)
         for module in self.modules():
             if isinstance(module, nn.Linear) and getattr(module, "_zero_init", False):
                 nn.init.zeros_(module.weight)
 
     def forward(self, input_ids: Tensor, target_ids: Tensor) -> Tensor:
         x = self.tok_emb(input_ids)
+        if self.bigram_emb is not None:
+            prev = torch.cat(
+                (
+                    torch.full_like(input_ids[:, :1], self.bigram_hash_bos_id),
+                    input_ids[:, :-1],
+                ),
+                dim=1,
+            )
+            bigram_ids = ((prev.long() * 257 + input_ids.long()) % self.bigram_hash_vocab).to(torch.long)
+            x = x + self.bigram_emb(bigram_ids).to(dtype=x.dtype)
         x = F.rms_norm(x, (x.size(-1),))
         x0 = x
         skips: list[Tensor] = []
@@ -830,6 +850,8 @@ def main() -> None:
         num_heads=args.num_heads,
         num_kv_heads=args.num_kv_heads,
         mlp_mult=args.mlp_mult,
+        bigram_hash_vocab=args.bigram_hash_vocab,
+        bigram_hash_bos_id=args.bigram_hash_bos_id,
         tie_embeddings=args.tie_embeddings,
         tied_embed_init_std=args.tied_embed_init_std,
         logit_softcap=args.logit_softcap,
@@ -862,8 +884,11 @@ def main() -> None:
     if base_model.skip_weights.numel() > 0:
         scalar_params.append(base_model.skip_weights)
     token_lr = args.tied_embed_lr if args.tie_embeddings else args.embed_lr
+    token_params = [base_model.tok_emb.weight]
+    if base_model.bigram_emb is not None:
+        token_params.append(base_model.bigram_emb.weight)
     optimizer_tok = torch.optim.Adam(
-        [{"params": [base_model.tok_emb.weight], "lr": token_lr, "base_lr": token_lr}],
+        [{"params": token_params, "lr": token_lr, "base_lr": token_lr}],
         betas=(args.beta1, args.beta2),
         eps=args.adam_eps,
         fused=True,
@@ -897,6 +922,10 @@ def main() -> None:
     log0(f"world_size:{world_size} grad_accum_steps:{grad_accum_steps}")
     log0("sdp_backends:cudnn=False flash=True mem_efficient=False math=False")
     log0(f"attention_mode:gqa num_heads:{args.num_heads} num_kv_heads:{args.num_kv_heads}")
+    if args.bigram_hash_vocab > 0:
+        log0(f"bigram_hash:enabled vocab:{args.bigram_hash_vocab} bos_id:{args.bigram_hash_bos_id}")
+    if args.post_step_weight_clip > 0:
+        log0(f"post_step_weight_clip:{args.post_step_weight_clip}")
     log0(
         f"tie_embeddings:{args.tie_embeddings} embed_lr:{token_lr} "
         f"head_lr:{args.head_lr if base_model.lm_head is not None else 0.0} "
@@ -1031,6 +1060,11 @@ def main() -> None:
             torch.nn.utils.clip_grad_norm_(base_model.parameters(), args.grad_clip_norm)
         for opt in optimizers:
             opt.step()
+        if args.post_step_weight_clip > 0:
+            with torch.no_grad():
+                for param in base_model.parameters():
+                    if torch.is_floating_point(param) and param.ndim >= 2:
+                        param.clamp_(-args.post_step_weight_clip, args.post_step_weight_clip)
         zero_grad_all()
 
         step += 1
