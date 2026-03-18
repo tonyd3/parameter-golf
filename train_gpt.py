@@ -56,6 +56,8 @@ class Hyperparameters:
     warmup_steps = int(os.environ.get("WARMUP_STEPS", 20))
     train_batch_tokens = int(os.environ.get("TRAIN_BATCH_TOKENS", 524_288))
     train_seq_len = int(os.environ.get("TRAIN_SEQ_LEN", 1024))
+    train_seq_len_start = int(os.environ.get("TRAIN_SEQ_LEN_START", 0))
+    seq_len_warmup_steps = int(os.environ.get("SEQ_LEN_WARMUP_STEPS", 0))
     max_wallclock_seconds = float(os.environ.get("MAX_WALLCLOCK_SECONDS", 600.0))
     qk_gain_init = float(os.environ.get("QK_GAIN_INIT", 1.5))
 
@@ -88,6 +90,8 @@ class Hyperparameters:
     adam_eps = float(os.environ.get("ADAM_EPS", 1e-8))
     grad_clip_norm = float(os.environ.get("GRAD_CLIP_NORM", 0.0))
     post_step_weight_clip = float(os.environ.get("POST_STEP_WEIGHT_CLIP", 0.0))
+    min_lr_scale = float(os.environ.get("MIN_LR_SCALE", 0.0))
+    attn_backend = os.environ.get("ATTN_BACKEND", "flash").strip().lower()
 
 # -----------------------------
 # MUON OPTIMIZER 
@@ -488,6 +492,12 @@ class DistributedTokenLoader:
 
     def next_batch(self, global_tokens: int, seq_len: int, grad_accum_steps: int) -> tuple[Tensor, Tensor]:
         local_tokens = global_tokens // (self.world_size * grad_accum_steps)
+        if local_tokens % seq_len != 0:
+            raise ValueError(
+                f"Per-rank local_tokens={local_tokens} must be divisible by seq_len={seq_len}; "
+                f"got TRAIN_BATCH_TOKENS={global_tokens}, WORLD_SIZE={self.world_size}, "
+                f"GRAD_ACCUM_STEPS={grad_accum_steps}"
+            )
         per_rank_span = local_tokens + 1
         chunk = self.stream.take(per_rank_span * self.world_size)
         start = self.rank * per_rank_span
@@ -783,10 +793,29 @@ def main() -> None:
     torch.backends.cudnn.allow_tf32 = True
     from torch.backends.cuda import enable_cudnn_sdp, enable_flash_sdp, enable_math_sdp, enable_mem_efficient_sdp
 
-    enable_cudnn_sdp(False)
-    enable_flash_sdp(True)
-    enable_mem_efficient_sdp(False)
-    enable_math_sdp(False)
+    attn_backend = args.attn_backend
+    if attn_backend == "flash":
+        enable_cudnn_sdp(False)
+        enable_flash_sdp(True)
+        enable_mem_efficient_sdp(False)
+        enable_math_sdp(False)
+    elif attn_backend == "cudnn":
+        enable_cudnn_sdp(True)
+        enable_flash_sdp(False)
+        enable_mem_efficient_sdp(False)
+        enable_math_sdp(False)
+    elif attn_backend == "mem_efficient":
+        enable_cudnn_sdp(False)
+        enable_flash_sdp(False)
+        enable_mem_efficient_sdp(True)
+        enable_math_sdp(False)
+    elif attn_backend == "math":
+        enable_cudnn_sdp(False)
+        enable_flash_sdp(False)
+        enable_mem_efficient_sdp(False)
+        enable_math_sdp(True)
+    else:
+        raise ValueError(f"Unknown ATTN_BACKEND={args.attn_backend!r}; expected flash, cudnn, mem_efficient, or math")
 
     logfile = None
     if master_process:
@@ -920,7 +949,13 @@ def main() -> None:
     n_params = sum(p.numel() for p in base_model.parameters())
     log0(f"model_params:{n_params}")
     log0(f"world_size:{world_size} grad_accum_steps:{grad_accum_steps}")
-    log0("sdp_backends:cudnn=False flash=True mem_efficient=False math=False")
+    log0(
+        "sdp_backends:"
+        f"cudnn={attn_backend == 'cudnn'} "
+        f"flash={attn_backend == 'flash'} "
+        f"mem_efficient={attn_backend == 'mem_efficient'} "
+        f"math={attn_backend == 'math'}"
+    )
     log0(f"attention_mode:gqa num_heads:{args.num_heads} num_kv_heads:{args.num_kv_heads}")
     if args.bigram_hash_vocab > 0:
         log0(f"bigram_hash:enabled vocab:{args.bigram_hash_vocab} bos_id:{args.bigram_hash_bos_id}")
@@ -933,6 +968,8 @@ def main() -> None:
     )
     log0(
         f"train_batch_tokens:{args.train_batch_tokens} train_seq_len:{args.train_seq_len} "
+        f"train_seq_len_start:{args.train_seq_len_start or args.train_seq_len} "
+        f"seq_len_warmup_steps:{args.seq_len_warmup_steps} "
         f"iterations:{args.iterations} warmup_steps:{args.warmup_steps} "
         f"max_wallclock_seconds:{args.max_wallclock_seconds:.3f}"
     )
@@ -950,16 +987,32 @@ def main() -> None:
 
     max_wallclock_ms = 1000.0 * args.max_wallclock_seconds if args.max_wallclock_seconds > 0 else None
 
+    def current_train_seq_len(step: int) -> int:
+        if args.seq_len_warmup_steps <= 0:
+            return args.train_seq_len
+        if args.train_seq_len_start <= 0:
+            return args.train_seq_len
+        if args.train_seq_len_start == args.train_seq_len:
+            return args.train_seq_len
+        return args.train_seq_len_start if step < args.seq_len_warmup_steps else args.train_seq_len
+
     def lr_mul(step: int, elapsed_ms: float) -> float:
+        floor = args.min_lr_scale
         if args.warmdown_iters <= 0:
             return 1.0
         if max_wallclock_ms is None:
             warmdown_start = max(args.iterations - args.warmdown_iters, 0)
-            return max((args.iterations - step) / max(args.warmdown_iters, 1), 0.0) if warmdown_start <= step < args.iterations else 1.0
+            if warmdown_start <= step < args.iterations:
+                raw = max((args.iterations - step) / max(args.warmdown_iters, 1), 0.0)
+                return floor + (1.0 - floor) * raw
+            return 1.0
         step_ms = elapsed_ms / max(step, 1)
         warmdown_ms = args.warmdown_iters * step_ms
         remaining_ms = max(max_wallclock_ms - elapsed_ms, 0.0)
-        return remaining_ms / max(warmdown_ms, 1e-9) if remaining_ms <= warmdown_ms else 1.0
+        if remaining_ms <= warmdown_ms:
+            raw = remaining_ms / max(warmdown_ms, 1e-9)
+            return floor + (1.0 - floor) * raw
+        return 1.0
 
     # Warmup primes the compiled forward/backward/optimizer paths, then we restore the
     # initial weights/optimizer state so measured training starts from the true init.
@@ -968,11 +1021,12 @@ def main() -> None:
         initial_optimizer_states = [copy.deepcopy(opt.state_dict()) for opt in optimizers]
         model.train()
         for warmup_step in range(args.warmup_steps):
+            seq_len = current_train_seq_len(0)
             zero_grad_all()
             for micro_step in range(grad_accum_steps):
                 if distributed:
                     model.require_backward_grad_sync = micro_step == grad_accum_steps - 1
-                x, y = train_loader.next_batch(args.train_batch_tokens, args.train_seq_len, grad_accum_steps)
+                x, y = train_loader.next_batch(args.train_batch_tokens, seq_len, grad_accum_steps)
                 with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=True):
                     warmup_loss = model(x, y)
                 (warmup_loss * grad_scale).backward()
@@ -1035,12 +1089,13 @@ def main() -> None:
 
         elapsed_ms = training_time_ms + 1000.0 * (time.perf_counter() - t0)
         scale = lr_mul(step, elapsed_ms)
+        seq_len = current_train_seq_len(step)
         zero_grad_all()
         train_loss = torch.zeros((), device=device)
         for micro_step in range(grad_accum_steps):
             if distributed:
                 model.require_backward_grad_sync = micro_step == grad_accum_steps - 1
-            x, y = train_loader.next_batch(args.train_batch_tokens, args.train_seq_len, grad_accum_steps)
+            x, y = train_loader.next_batch(args.train_batch_tokens, seq_len, grad_accum_steps)
             with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=True):
                 loss = model(x, y)
             train_loss += loss.detach()
@@ -1076,7 +1131,8 @@ def main() -> None:
         if should_log_train:
             log0(
                 f"step:{step}/{args.iterations} train_loss:{train_loss.item():.4f} "
-                f"train_time:{approx_training_time_ms:.0f}ms step_avg:{approx_training_time_ms / step:.2f}ms"
+                f"train_time:{approx_training_time_ms:.0f}ms step_avg:{approx_training_time_ms / step:.2f}ms "
+                f"seq_len:{seq_len} lr_mul:{scale:.4f}"
             )
 
         # Needed to sync whether we've reached the wallclock cap.
