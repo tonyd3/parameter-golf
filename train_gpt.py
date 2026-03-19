@@ -70,6 +70,9 @@ class Hyperparameters:
     mlp_mult = int(os.environ.get("MLP_MULT", 2))
     bigram_hash_vocab = int(os.environ.get("BIGRAM_HASH_VOCAB", 0))
     bigram_hash_bos_id = int(os.environ.get("BIGRAM_HASH_BOS_ID", 1))
+    bigram_logit_vocab = int(os.environ.get("BIGRAM_LOGIT_VOCAB", 0))
+    bigram_logit_bos_id = int(os.environ.get("BIGRAM_LOGIT_BOS_ID", 1))
+    bigram_logit_scale = float(os.environ.get("BIGRAM_LOGIT_SCALE", 1.0))
     tie_embeddings = bool(int(os.environ.get("TIE_EMBEDDINGS", "1")))
     rope_base = float(os.environ.get("ROPE_BASE", 10000.0))
     logit_softcap = float(os.environ.get("LOGIT_SOFTCAP", 30.0))
@@ -669,6 +672,9 @@ class GPT(nn.Module):
         mlp_mult: int,
         bigram_hash_vocab: int,
         bigram_hash_bos_id: int,
+        bigram_logit_vocab: int,
+        bigram_logit_bos_id: int,
+        bigram_logit_scale: float,
         tie_embeddings: bool,
         tied_embed_init_std: float,
         logit_softcap: float,
@@ -682,9 +688,16 @@ class GPT(nn.Module):
         self.tied_embed_init_std = tied_embed_init_std
         self.logit_softcap = logit_softcap
         self.tok_emb = nn.Embedding(vocab_size, model_dim)
+        self.vocab_size = vocab_size
         self.bigram_hash_vocab = bigram_hash_vocab
         self.bigram_hash_bos_id = bigram_hash_bos_id
         self.bigram_emb = nn.Embedding(bigram_hash_vocab, model_dim) if bigram_hash_vocab > 0 else None
+        self.bigram_logit_vocab = bigram_logit_vocab
+        self.bigram_logit_bos_id = bigram_logit_bos_id
+        self.bigram_logit_scale = bigram_logit_scale
+        self.bigram_logit_head = (
+            nn.Embedding(bigram_logit_vocab, vocab_size) if bigram_logit_vocab > 0 else None
+        )
         self.num_encoder_layers = num_layers // 2
         self.num_decoder_layers = num_layers - self.num_encoder_layers
         self.num_skip_weights = min(self.num_encoder_layers, self.num_decoder_layers)
@@ -713,21 +726,26 @@ class GPT(nn.Module):
             nn.init.normal_(self.tok_emb.weight, mean=0.0, std=self.tied_embed_init_std)
         if self.bigram_emb is not None:
             nn.init.normal_(self.bigram_emb.weight, mean=0.0, std=self.tied_embed_init_std)
+        if self.bigram_logit_head is not None:
+            nn.init.zeros_(self.bigram_logit_head.weight)
         for module in self.modules():
             if isinstance(module, nn.Linear) and getattr(module, "_zero_init", False):
                 nn.init.zeros_(module.weight)
 
+    def _hashed_bigram_ids(self, input_ids: Tensor, bos_id: int, vocab: int) -> Tensor:
+        prev = torch.cat(
+            (
+                torch.full_like(input_ids[:, :1], bos_id),
+                input_ids[:, :-1],
+            ),
+            dim=1,
+        )
+        return ((prev.long() * 257 + input_ids.long()) % vocab).to(torch.long)
+
     def forward(self, input_ids: Tensor, target_ids: Tensor) -> Tensor:
         x = self.tok_emb(input_ids)
         if self.bigram_emb is not None:
-            prev = torch.cat(
-                (
-                    torch.full_like(input_ids[:, :1], self.bigram_hash_bos_id),
-                    input_ids[:, :-1],
-                ),
-                dim=1,
-            )
-            bigram_ids = ((prev.long() * 257 + input_ids.long()) % self.bigram_hash_vocab).to(torch.long)
+            bigram_ids = self._hashed_bigram_ids(input_ids, self.bigram_hash_bos_id, self.bigram_hash_vocab)
             x = x + self.bigram_emb(bigram_ids).to(dtype=x.dtype)
         x = F.rms_norm(x, (x.size(-1),))
         x0 = x
@@ -750,6 +768,12 @@ class GPT(nn.Module):
             if self.lm_head is None:
                 raise RuntimeError("lm_head is required when tie_embeddings=False")
             logits_proj = self.lm_head(x)
+        if self.bigram_logit_head is not None:
+            bigram_logit_ids = self._hashed_bigram_ids(
+                input_ids, self.bigram_logit_bos_id, self.bigram_logit_vocab
+            ).reshape(-1)
+            bigram_logits = self.bigram_logit_head(bigram_logit_ids).to(dtype=logits_proj.dtype)
+            logits_proj = logits_proj + self.bigram_logit_scale * bigram_logits
         logits = self.logit_softcap * torch.tanh(logits_proj / self.logit_softcap)
         return F.cross_entropy(logits.float(), targets, reduction="mean")
 
@@ -881,6 +905,9 @@ def main() -> None:
         mlp_mult=args.mlp_mult,
         bigram_hash_vocab=args.bigram_hash_vocab,
         bigram_hash_bos_id=args.bigram_hash_bos_id,
+        bigram_logit_vocab=args.bigram_logit_vocab,
+        bigram_logit_bos_id=args.bigram_logit_bos_id,
+        bigram_logit_scale=args.bigram_logit_scale,
         tie_embeddings=args.tie_embeddings,
         tied_embed_init_std=args.tied_embed_init_std,
         logit_softcap=args.logit_softcap,
@@ -916,6 +943,8 @@ def main() -> None:
     token_params = [base_model.tok_emb.weight]
     if base_model.bigram_emb is not None:
         token_params.append(base_model.bigram_emb.weight)
+    if base_model.bigram_logit_head is not None:
+        token_params.append(base_model.bigram_logit_head.weight)
     optimizer_tok = torch.optim.Adam(
         [{"params": token_params, "lr": token_lr, "base_lr": token_lr}],
         betas=(args.beta1, args.beta2),
@@ -959,6 +988,11 @@ def main() -> None:
     log0(f"attention_mode:gqa num_heads:{args.num_heads} num_kv_heads:{args.num_kv_heads}")
     if args.bigram_hash_vocab > 0:
         log0(f"bigram_hash:enabled vocab:{args.bigram_hash_vocab} bos_id:{args.bigram_hash_bos_id}")
+    if args.bigram_logit_vocab > 0:
+        log0(
+            f"bigram_logit_prior:enabled vocab:{args.bigram_logit_vocab} "
+            f"bos_id:{args.bigram_logit_bos_id} scale:{args.bigram_logit_scale}"
+        )
     if args.post_step_weight_clip > 0:
         log0(f"post_step_weight_clip:{args.post_step_weight_clip}")
     log0(

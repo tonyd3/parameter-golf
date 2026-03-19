@@ -47,6 +47,20 @@ Proxy baseline on the 1M-token validation prefix:
 - `final_int8_zlib_roundtrip_exact val_loss:4.70558929 val_bpb:2.81933844`
 - `serialized_model_int8_zlib:737967 bytes`
 
+## Scope Note
+
+Experiments `01` through `37` are local Apple Silicon / MLX experiments, generally run from `train_gpt_mlx.py` on a MacBook with the 1M-token local proxy unless otherwise noted. Experiments `38+` are remote CUDA experiments on single-GPU infrastructure using `train_gpt.py`.
+
+## Recording Rule
+
+Going forward, every completed experiment note should include:
+
+- the exact launch command in a fenced `bash` block
+- the log path used as the source of truth for recorded metrics
+- the run ID and the final exact metric copied from that log
+
+If a sweep contains multiple concrete runs, record one exact command per run ID.
+
 ## Tracker
 
 | ID | Experiment | Scope | Status | Run ID | Result |
@@ -117,3 +131,60 @@ Top `modded-nanogpt` ports to try next, ranked by likely usefulness for paramete
 |---:|------------|-------|--------|--------|--------|
 | 38 | 1xH100 KV1 + bigram + untied remote run | Remote compound | Completed | `exp38_h100_10min_kv1_bigram_untied` | smaller and faster than baseline, but worse final score: `val_bpb 1.56065969` |
 | 39 | 1xH100 baseline scale with training-only knobs | Remote training stack | Completed | `exp39_h100_10min_opt_only` | strong regression vs baseline: `val_bpb 1.57489392` |
+| 43 | 1xGPU seq warmup + min-LR 0.1 remote run | Remote training schedule | Completed | `exp43_1gpu_seqwarm150_minlr01` | new best recorded single-GPU 10-minute result: `val_bpb 1.49781690` |
+
+## Phase 7
+
+Planned remote replication pass: re-run each local experiment from `01` through `37` as a fresh single-H100 experiment to measure transfer from the MacBook MLX proxy to the real PyTorch/CUDA regime.
+
+| ID | Experiment | Scope | Status | Run ID | Result |
+|---:|------------|-------|--------|--------|--------|
+| 44 | Re-run experiment 01 on single H100 | Remote replication | Planned |  |  |
+| 45 | Re-run experiment 02 on single H100 | Remote replication | Planned |  |  |
+| 46 | Re-run experiment 03 on single H100 | Remote replication | Planned |  |  |
+| 47 | Re-run experiment 04 on single H100 | Remote replication | Planned |  |  |
+| 48 | Re-run experiment 05 on single H100 | Remote replication | Planned |  |  |
+| 49 | Re-run experiment 06 on single H100 | Remote replication | Planned |  |  |
+| 50 | Re-run experiment 07 on single H100 | Remote replication | Planned |  |  |
+| 51 | Re-run experiment 08 on single H100 | Remote replication | Planned |  |  |
+| 52 | Re-run experiment 09 on single H100 | Remote replication | Planned |  |  |
+| 53 | Re-run experiment 10 on single H100 | Remote replication | Planned |  |  |
+| 54 | Re-run experiment 11 on single H100 | Remote replication | Planned |  |  |
+| 55 | Re-run experiment 12 on single H100 | Remote replication | Planned |  |  |
+| 56 | Re-run experiment 13 on single H100 | Remote replication | Planned |  |  |
+| 57 | Re-run experiment 14 on single H100 | Remote replication | Planned |  |  |
+| 58 | Re-run experiment 15 on single H100 | Remote replication | Planned |  |  |
+| 59 | Re-run experiment 16 on single H100 | Remote replication | Planned |  |  |
+| 60 | Re-run experiment 17 on single H100 | Remote replication | Planned |  |  |
+| 61 | Re-run experiment 18 on single H100 | Remote replication | Planned |  |  |
+| 62 | Re-run experiment 19 on single H100 | Remote replication | Planned |  |  |
+| 63 | Re-run experiment 20 on single H100 | Remote replication | Planned |  |  |
+| 64 | Re-run experiment 21 on single H100 | Remote replication | Planned |  |  |
+| 65 | Re-run experiment 22 on single H100 | Remote replication | Planned |  |  |
+| 66 | Re-run experiment 23 on single H100 | Remote replication | Planned |  |  |
+| 67 | Re-run experiment 24 on single H100 | Remote replication | Planned |  |  |
+| 68 | Re-run experiment 25 on single H100 | Remote replication | Planned |  |  |
+| 69 | Re-run experiment 26 on single H100 | Remote replication | Planned |  |  |
+| 70 | Re-run experiment 27 on single H100 | Remote replication | Planned |  |  |
+| 71 | Re-run experiment 28 on single H100 | Remote replication | Planned |  |  |
+| 72 | Re-run experiment 29 on single H100 | Remote replication | Planned |  |  |
+| 73 | Re-run experiment 30 on single H100 | Remote replication | Planned |  |  |
+| 74 | Re-run experiment 31 on single H100 | Remote replication | Planned |  |  |
+| 75 | Re-run experiment 32 on single H100 | Remote replication | Planned |  |  |
+| 76 | Re-run experiment 33 on single H100 | Remote replication | Planned |  |  |
+| 77 | Re-run experiment 34 on single H100 | Remote replication | Planned |  |  |
+| 78 | Re-run experiment 35 on single H100 | Remote replication | Planned |  |  |
+| 79 | Re-run experiment 36 on single H100 | Remote replication | Planned |  |  |
+| 80 | Re-run experiment 37 on single H100 | Remote replication | Planned |  |  |
+
+## Phase 8
+
+Moonshot architecture phase: prioritize drastic structural changes over iterative optimizer tuning.
+
+| ID | Experiment | Scope | Status | Run ID | Result |
+|---:|------------|-------|--------|--------|--------|
+| 81 | Residual n-gram prior logits | Moonshot architecture | Planned |  | explicit bigram/trigram logit prior plus transformer residual |
+| 82 | Shared/recurrent block stack | Moonshot architecture | Planned |  | many logical layers with few unique weights and per-step modulation |
+| 83 | Lexical feature super-stack | Moonshot architecture | Planned |  | combine token, bigram, and value-side lexical features |
+| 84 | Structured output head | Moonshot architecture | Planned |  | factorized or low-rank residual head instead of a plain flat projection |
+| 85 | Hybrid attention + recurrence mixer | Moonshot architecture | Planned |  | replace part of the stack with cheap recurrent or convolutional mixing |
