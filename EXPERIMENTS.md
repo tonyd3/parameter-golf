@@ -40,6 +40,14 @@ VAL_MAX_TOKENS=1048576
 
 This is a local-only validation proxy added to `train_gpt_mlx.py`. When used, results are only comparable to other runs that use the same fixed proxy.
 
+For standard local comparison loops, also fix:
+
+```bash
+ITERATIONS=600
+```
+
+This is the local stand-in for the contest’s fixed time budget. Local runs above `600` steps are still useful, but they should be treated as exploratory step-scaling evidence rather than the default apples-to-apples benchmark.
+
 Proxy baseline on the 1M-token validation prefix:
 
 - Run ID: `mlx_local_v2_subset`
@@ -188,3 +196,116 @@ Moonshot architecture phase: prioritize drastic structural changes over iterativ
 | 83 | Lexical feature super-stack | Moonshot architecture | Planned |  | combine token, bigram, and value-side lexical features |
 | 84 | Structured output head | Moonshot architecture | Planned |  | factorized or low-rank residual head instead of a plain flat projection |
 | 85 | Hybrid attention + recurrence mixer | Moonshot architecture | Planned |  | replace part of the stack with cheap recurrent or convolutional mixing |
+
+## Loop 01
+
+Structured self-improvement loop scaffolded under [experiments/loop_01](/Users/tony/dev/parameter-golf/experiments/loop_01/README.md). This loop uses the current best single-H100 remote run, `exp43_1gpu_seqwarm150_minlr01`, as the comparison anchor.
+
+| Rank | Experiment Folder | Scope | Status | Planned Run ID | Focus |
+|----:|-------------------|-------|--------|----------------|-------|
+| 1 | `loop_01/01_seqwarm_only` | Isolation | Scaffolded | `loop01_exp01_seqwarm_only` | remove `MIN_LR_SCALE` and keep seq warmup |
+| 2 | `loop_01/02_minlr_only` | Isolation | Scaffolded | `loop01_exp02_minlr_only` | remove seq warmup and keep `MIN_LR_SCALE=0.1` |
+| 3 | `loop_01/03_seqwarm_200` | Exploitation | Scaffolded | `loop01_exp03_seqwarm200` | extend short-context phase |
+| 4 | `loop_01/04_seqwarm_050` | Isolation | Scaffolded | `loop01_exp04_seqwarm050` | shorten short-context phase |
+| 5 | `loop_01/05_seqstart_256` | Exploitation | Scaffolded | `loop01_exp05_seqstart256` | start at even shorter sequence length |
+| 6 | `loop_01/06_minlr_005` | Exploitation | Scaffolded | `loop01_exp06_minlr005` | lower the LR floor |
+| 7 | `loop_01/07_minlr_020` | Isolation | Scaffolded | `loop01_exp07_minlr020` | raise the LR floor |
+| 8 | `loop_01/08_batch_393216` | Systems | Scaffolded | `loop01_exp08_batch393216` | smaller token batch |
+| 9 | `loop_01/09_batch_655360` | Systems | Scaffolded | `loop01_exp09_batch655360` | larger token batch |
+| 10 | `loop_01/10_bigram2048_best_sched` | Wildcard | Scaffolded | `loop01_exp10_bigram2048` | re-test bigram hash on the best remote schedule |
+
+## Loop 02
+
+Active local MLX self-improvement loop scaffolded under [experiments/loop_02](/Users/tony/dev/parameter-golf/experiments/loop_02/README.md). This loop uses the best recorded local proxy result, `exp37_warmup40`, as its current comparison anchor and upgrades all new local runs to at least `600` iterations.
+
+| Rank | Experiment Folder | Scope | Status | Planned Run ID | Focus |
+|----:|-------------------|-------|--------|----------------|-------|
+| 1 | `loop_02/01_anchor_600` | Exploitation | Completed | `loop02_exp01_anchor600` | `val_bpb 2.18845266`, `1043961 bytes`, new best local proxy result |
+| 2 | `loop_02/02_warmdown_120` | Schedule | Completed | `loop02_exp02_warmdown120` | `val_bpb 2.15940515`, `1046216 bytes`, new best local proxy result |
+| 3 | `loop_02/03_bigram_4096` | Exploitation | Completed | `loop02_exp03_bigram4096` | `val_bpb 2.16443825`, `1271908 bytes`, slight regression vs loop02 exp02 |
+| 4 | `loop_02/04_retie_embeddings` | Isolation | Completed | `loop02_exp04_retie` | `val_bpb 2.23452219`, `944823 bytes`, tied head regressed but saved size |
+| 5 | `loop_02/05_no_clip` | Isolation | Completed | `loop02_exp05_noclip` | `val_bpb 2.14198973`, `1106239 bytes`, new best local quality result with larger compressed size |
+| 6 | `loop_02/06_no_bigram` | Isolation | Completed | `loop02_exp06_nobigram` | `val_bpb 2.22662314`, `817851 bytes`, confirms bigram hash is materially helping |
+| 7 | `loop_02/07_value_embed_best` | Feature compound | Completed | `loop02_exp07_valueembed` | `val_bpb 2.17812277`, `1147080 bytes`, positive overall but weaker than the anchor |
+| 8 | `loop_02/08_second_input_best` | Wildcard feature | Completed | `loop02_exp08_secondinput` | `val_bpb 2.18034948`, `1146112 bytes`, positive overall but weaker than the anchor |
+| 9 | `loop_02/09_batch_4096` | Systems | Completed | `loop02_exp09_batch4096` | `val_bpb 2.29994173`, `1043356 bytes`, much worse despite faster steps |
+| 10 | `loop_02/10_batch_16384` | Systems | Completed | `loop02_exp10_batch16384` | `val_bpb 2.12161593`, `1044469 bytes`, new best local proxy result |
+
+## Loop 03
+
+Follow-up local loop seeded by the two strongest independent wins from `loop_02`: larger batch and no clipping.
+
+| Rank | Experiment Folder | Scope | Status | Run ID | Result |
+|----:|-------------------|-------|--------|--------|--------|
+| 1 | `loop_03/01_batch16384_noclip` | Compound pilot | Completed | `loop03_pilot_batch16384_noclip` | `val_bpb 2.07760213`, `1104375 bytes`, new best local quality result |
+| 2 | `loop_03/02_batch16384_noclip_warmdown120` | Schedule compound | Completed | `loop03_exp02_batch16384_noclip_warmdown120` | `val_bpb 2.06218386`, `1105923 bytes`, new best local quality result |
+| 3 | `loop_03/03_iters900_best_stack` | Step scaling | Completed | `loop03_exp03_iters900_best` | exploratory: `val_bpb 2.01173704`, `1104197 bytes`, not part of fixed-600 comparison set |
+| 4 | `loop_03/04_iters1200_best_stack` | Step scaling | Completed | `loop03_exp04_iters1200_best` | exploratory: `val_bpb 1.99389637`, `1105964 bytes`, not part of fixed-600 comparison set |
+
+## Loop 04
+
+Moonshot local loop built around higher-variance structural hypotheses while keeping `ITERATIONS=600` fixed.
+
+| Rank | Experiment Folder | Scope | Status | Run ID | Result |
+|----:|-------------------|-------|--------|--------|--------|
+| 1 | `loop_04/01_lexical_superstack` | Moonshot lexical | Completed | `loop04_exp01_lexical_superstack` | `val_bpb 2.05506490`, `1337766 bytes`, modest quality win with a real size cost |
+| 2 | `loop_04/02_shared2_layers8` | Moonshot recurrence | Completed | `loop04_exp02_shared2_layers8` | `val_bpb 2.08338631`, `798448 bytes`, weaker quality but very strong size reduction |
+| 3 | `loop_04/03_shared3_layers12` | Moonshot recurrence | Completed | `loop04_exp03_shared3_layers12` | `val_bpb 2.06956308`, `953739 bytes`, still weaker than the anchor but size-efficient |
+| 4 | `loop_04/04_shared2_layers8_lexical` | Compound moonshot | Completed | `loop04_exp04_shared2_layers8_lexical` | `val_bpb 2.08069849`, `1032495 bytes`, better than pure shared2 but worse than the anchor |
+| 5 | `loop_04/05_partial_key_offset16` | Moonshot attention | Completed | `loop04_exp05_partialkey16` | `val_bpb 1.99532927`, `1105520 bytes`, new best fixed-600 local result |
+| 6 | `loop_04/06_mtp2_best` | Moonshot objective | Completed | `loop04_exp06_mtp2` | `val_bpb 2.35199772`, `1098861 bytes`, strongly negative again |
+| 7 | `loop_04/07_altcheap_layers8` | Moonshot hybrid depth | Completed | `loop04_exp07_altcheap8` | `val_bpb 2.04854176`, `1477865 bytes`, real quality win over the anchor but still behind partial-key |
+| 8 | `loop_04/08_lowrank32_dim160` | Moonshot width/structure | Completed | `loop04_exp08_lowrank32_dim160` | `val_bpb 2.06846816`, `1340030 bytes`, slight regression with larger artifact |
+| 9 | `loop_04/09_token_smear_best` | Moonshot lexical | Completed | `loop04_exp09_tokensmear` | `val_bpb 2.09031857`, `1101505 bytes`, still negative on the stronger stack |
+| 10 | `loop_04/10_shared1_layers12` | Extreme moonshot | Completed | `loop04_exp10_shared1_layers12` | `val_bpb 2.10566413`, `646059 bytes`, poor quality but exceptional size efficiency |
+
+## Loop 05
+
+PKO-centered moonshot loop that compounds the strongest `loop_04` win with the next most plausible structural and lexical variants while keeping `ITERATIONS=600` fixed.
+
+| Rank | Experiment Folder | Scope | Status | Planned Run ID | Focus |
+|----:|-------------------|-------|--------|----------------|-------|
+| 1 | `loop_05/01_pko16_altcheap8` | Compound moonshot | Completed | `loop05_exp01_pko16_altcheap8` | `val_bpb 1.97023378`, `1476051 bytes`, new best fixed-600 local result |
+| 2 | `loop_05/02_pko16_lexical_superstack` | Compound moonshot | Completed | `loop05_exp02_pko16_lexical` | `val_bpb 1.97056948`, `1336971 bytes`, nearly tied with the new best and smaller |
+| 3 | `loop_05/03_pko08` | Parameter sweep | Completed | `loop05_exp03_pko08` | `val_bpb 2.06938981`, `1104113 bytes`, strong regression so PKO8 is not competitive |
+| 4 | `loop_05/04_pko32` | Parameter sweep | Completed | `loop05_exp04_pko32` | `val_bpb 1.96638761`, `1104729 bytes`, new best fixed-600 local result |
+| 5 | `loop_05/05_pko16_shared3_layers12` | Quality/bytes hybrid | Completed | `loop05_exp05_pko16_shared3` | `val_bpb 2.00189255`, `954048 bytes`, strong quality/bytes hybrid |
+| 6 | `loop_05/06_pko16_shared2_layers8` | Quality/bytes hybrid | Completed | `loop05_exp06_pko16_shared2` | `val_bpb 2.02254162`, `798494 bytes`, smaller but weaker than shared3 |
+| 7 | `loop_05/07_pko16_lowrank32_dim160` | Width/structure hybrid | Completed | `loop05_exp07_pko16_lowrank160` | `val_bpb 2.03997304`, `1340151 bytes`, still not competitive |
+| 8 | `loop_05/08_pko16_value_embed` | Lexical isolation | Completed | `loop05_exp08_pko16_valueembed` | `val_bpb 1.97729503`, `1223300 bytes`, strong positive but behind the PKO leaders |
+| 9 | `loop_05/09_pko16_second_input` | Lexical isolation | Completed | `loop05_exp09_pko16_secondinput` | `val_bpb 1.98834388`, `1219910 bytes`, positive but weaker than value embed |
+| 10 | `loop_05/10_pko16_shared1_layers12` | Extreme size frontier | Completed | `loop05_exp10_pko16_shared1` | `val_bpb 2.06400459`, `645535 bytes`, still only interesting for extreme size efficiency |
+
+## Loop 06
+
+PKO32-centered loop that carries the new best attention bias forward and tests whether the strongest `loop_05` compounds keep improving.
+
+| Rank | Experiment Folder | Scope | Status | Planned Run ID | Focus |
+|----:|-------------------|-------|--------|----------------|-------|
+| 1 | `loop_06/01_pko32_altcheap8` | Compound moonshot | Completed | `loop06_exp01_pko32_altcheap8` | `val_bpb 1.94548370`, `1479360 bytes`, strong frontier improvement over PKO32 base |
+| 2 | `loop_06/02_pko32_lexical_superstack` | Compound moonshot | Completed | `loop06_exp02_pko32_lexical` | `val_bpb 1.94168810`, `1336307 bytes`, new best fixed-600 local result |
+| 3 | `loop_06/03_pko32_value_embed` | Lexical isolation | Completed | `loop06_exp03_pko32_valueembed` | `val_bpb 1.94968586`, `1223545 bytes`, strong but still behind the full lexical stack |
+| 4 | `loop_06/04_pko32_second_input` | Lexical isolation | Completed | `loop06_exp04_pko32_secondinput` | `val_bpb 1.95827272`, `1220709 bytes`, positive but weaker than value-only |
+| 5 | `loop_06/05_pko48` | Parameter sweep | Completed | `loop06_exp05_pko48` | `val_bpb 1.96573380`, `1106232 bytes`, slightly worse than PKO32 so the sweep likely peaked |
+| 6 | `loop_06/06_pko64` | Parameter sweep | Completed | `loop06_exp06_pko64` | `val_bpb 1.96631690`, `1106993 bytes`, confirms PKO32 is the peak so far |
+| 7 | `loop_06/07_pko32_shared3_layers12` | Quality/bytes hybrid | Completed | `loop06_exp07_pko32_shared3` | `val_bpb 1.97217794`, `952069 bytes`, excellent balanced quality/bytes result |
+| 8 | `loop_06/08_pko32_shared2_layers8` | Quality/bytes hybrid | Completed | `loop06_exp08_pko32_shared2` | `val_bpb 1.99077414`, `799070 bytes`, improved but still weaker than shared3 |
+| 9 | `loop_06/09_pko32_altcheap8_value` | Compound moonshot | Completed | `loop06_exp09_pko32_altcheap8_value` | `val_bpb 1.92565973`, `1593264 bytes`, new best fixed-600 local result |
+| 10 | `loop_06/10_pko32_shared1_layers12` | Extreme size frontier | Completed | `loop06_exp10_pko32_shared1` | `val_bpb 2.01895114`, `645225 bytes`, still only interesting for extreme size efficiency |
+
+## Loop 07
+
+Single-H100 candidate pack that ports the strongest local `PKO32`/lexical/depth ideas onto the CUDA trainer and keeps the best known remote schedule fixed.
+
+| Rank | Experiment Folder | Scope | Status | Planned Run ID | Focus |
+|----:|-------------------|-------|--------|----------------|-------|
+| 1 | `loop_07/01_sched_anchor` | Remote anchor | Scaffolded | `loop07_exp01_sched_anchor` | best existing single-H100 schedule anchor |
+| 2 | `loop_07/02_pko32_bigram` | Lower-risk port | Scaffolded | `loop07_exp02_pko32_bigram` | add PKO32 and bigram only |
+| 3 | `loop_07/03_pko64_bigram` | Lower-risk port | Scaffolded | `loop07_exp03_pko64_bigram` | full-head PKO analog with bigram |
+| 4 | `loop_07/04_pko64_value` | Lexical compound | Scaffolded | `loop07_exp04_pko64_value` | strongest simple lexical branch under PKO64 |
+| 5 | `loop_07/05_pko64_lexical_superstack` | Lexical compound | Scaffolded | `loop07_exp05_pko64_lexical` | full lexical compound under PKO64 |
+| 6 | `loop_07/06_pko64_altcheap` | Depth compound | Scaffolded | `loop07_exp06_pko64_altcheap` | alternating cheap depth under PKO64 |
+| 7 | `loop_07/07_pko64_altcheap_value` | Main contender | Scaffolded | `loop07_exp07_pko64_altcheap_value` | closest H100 analog of the best local result |
+| 8 | `loop_07/08_pko64_shared3` | Quality/bytes hybrid | Scaffolded | `loop07_exp08_pko64_shared3` | strongest shared-depth hybrid on H100 |
+| 9 | `loop_07/09_pko32_altcheap_value` | Lower-risk contender | Scaffolded | `loop07_exp09_pko32_altcheap_value` | half-head PKO version of the best local analog |
+| 10 | `loop_07/10_pko64_lexical_untied` | Aggressive contender | Scaffolded | `loop07_exp10_pko64_lexical_untied` | highest-upside untied lexical PKO candidate |

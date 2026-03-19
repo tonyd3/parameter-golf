@@ -64,22 +64,15 @@ class Hyperparameters:
     # Model shape.
     vocab_size = int(os.environ.get("VOCAB_SIZE", 1024))
     num_layers = int(os.environ.get("NUM_LAYERS", 9))
-    num_unique_blocks = int(os.environ.get("NUM_UNIQUE_BLOCKS", 0))
     num_kv_heads = int(os.environ.get("NUM_KV_HEADS", 4))
     model_dim = int(os.environ.get("MODEL_DIM", 512))
     num_heads = int(os.environ.get("NUM_HEADS", 8))
     mlp_mult = int(os.environ.get("MLP_MULT", 2))
-    cheap_block_every = int(os.environ.get("CHEAP_BLOCK_EVERY", 0))
-    cheap_block_offset = int(os.environ.get("CHEAP_BLOCK_OFFSET", 1))
-    cheap_block_mlp_mult = int(os.environ.get("CHEAP_BLOCK_MLP_MULT", 0))
     bigram_hash_vocab = int(os.environ.get("BIGRAM_HASH_VOCAB", 0))
     bigram_hash_bos_id = int(os.environ.get("BIGRAM_HASH_BOS_ID", 1))
     bigram_logit_vocab = int(os.environ.get("BIGRAM_LOGIT_VOCAB", 0))
     bigram_logit_bos_id = int(os.environ.get("BIGRAM_LOGIT_BOS_ID", 1))
     bigram_logit_scale = float(os.environ.get("BIGRAM_LOGIT_SCALE", 1.0))
-    use_second_input_embed = bool(int(os.environ.get("USE_SECOND_INPUT_EMBED", "0")))
-    use_value_embed = bool(int(os.environ.get("USE_VALUE_EMBED", "0")))
-    partial_key_offset_dims = int(os.environ.get("PARTIAL_KEY_OFFSET_DIMS", 0))
     tie_embeddings = bool(int(os.environ.get("TIE_EMBEDDINGS", "1")))
     rope_base = float(os.environ.get("ROPE_BASE", 10000.0))
     logit_softcap = float(os.environ.get("LOGIT_SOFTCAP", 30.0))
@@ -583,7 +576,6 @@ class CausalSelfAttention(nn.Module):
         num_kv_heads: int,
         rope_base: float,
         qk_gain_init: float,
-        partial_key_offset_dims: int = 0,
     ):
         super().__init__()
         if dim % num_heads != 0:
@@ -595,10 +587,6 @@ class CausalSelfAttention(nn.Module):
         self.head_dim = dim // num_heads
         if self.head_dim % 2 != 0:
             raise ValueError("head_dim must be even for RoPE")
-        if partial_key_offset_dims < 0 or partial_key_offset_dims > self.head_dim:
-            raise ValueError(
-                f"partial_key_offset_dims must be in [0, head_dim={self.head_dim}], got {partial_key_offset_dims}"
-            )
         kv_dim = self.num_kv_heads * self.head_dim
         self.c_q = CastedLinear(dim, dim, bias=False)
         self.c_k = CastedLinear(dim, kv_dim, bias=False)
@@ -607,24 +595,17 @@ class CausalSelfAttention(nn.Module):
         self.proj._zero_init = True
         self.q_gain = nn.Parameter(torch.full((num_heads,), qk_gain_init, dtype=torch.float32))
         self.rotary = Rotary(self.head_dim, base=rope_base)
-        self.partial_key_offset_dims = partial_key_offset_dims
 
-    def forward(self, x: Tensor, value_source: Tensor | None = None) -> Tensor:
+    def forward(self, x: Tensor) -> Tensor:
         bsz, seqlen, dim = x.shape
         q = self.c_q(x).reshape(bsz, seqlen, self.num_heads, self.head_dim).transpose(1, 2)
         k = self.c_k(x).reshape(bsz, seqlen, self.num_kv_heads, self.head_dim).transpose(1, 2)
-        v_input = x if value_source is None else value_source
-        v = self.c_v(v_input).reshape(bsz, seqlen, self.num_kv_heads, self.head_dim).transpose(1, 2)
+        v = self.c_v(x).reshape(bsz, seqlen, self.num_kv_heads, self.head_dim).transpose(1, 2)
         q = F.rms_norm(q, (q.size(-1),))
         k = F.rms_norm(k, (k.size(-1),))
         cos, sin = self.rotary(seqlen, x.device, q.dtype)
         q = apply_rotary_emb(q, cos, sin)
         k = apply_rotary_emb(k, cos, sin)
-        if self.partial_key_offset_dims > 0:
-            d = self.partial_key_offset_dims
-            zero_prefix = torch.zeros_like(k[:, :, :1, :d])
-            k_off = torch.cat((zero_prefix, k[:, :, :-1, :d]), dim=2)
-            k = torch.cat((k_off, k[:, :, :, d:]), dim=-1)
         q = q * self.q_gain.to(dtype=q.dtype)[None, :, None, None]
         y = F.scaled_dot_product_attention(
             q,
@@ -652,18 +633,6 @@ class MLP(nn.Module):
         return self.proj(x.square())
 
 
-def block_mlp_mult(
-    block_idx: int,
-    default_mlp_mult: int,
-    cheap_every: int,
-    cheap_offset: int,
-    cheap_mlp_mult: int,
-) -> int:
-    if cheap_every > 0 and block_idx % cheap_every == cheap_offset % cheap_every:
-        return cheap_mlp_mult
-    return default_mlp_mult
-
-
 class Block(nn.Module):
     def __init__(
         self,
@@ -673,31 +642,22 @@ class Block(nn.Module):
         mlp_mult: int,
         rope_base: float,
         qk_gain_init: float,
-        partial_key_offset_dims: int = 0,
     ):
         super().__init__()
         self.attn_norm = RMSNorm()
         self.mlp_norm = RMSNorm()
-        self.attn = CausalSelfAttention(
-            dim,
-            num_heads,
-            num_kv_heads,
-            rope_base,
-            qk_gain_init,
-            partial_key_offset_dims,
-        )
-        self.mlp = MLP(dim, mlp_mult) if mlp_mult > 0 else None
+        self.attn = CausalSelfAttention(dim, num_heads, num_kv_heads, rope_base, qk_gain_init)
+        self.mlp = MLP(dim, mlp_mult)
         self.attn_scale = nn.Parameter(torch.ones(dim, dtype=torch.float32))
         self.mlp_scale = nn.Parameter(torch.ones(dim, dtype=torch.float32))
         self.resid_mix = nn.Parameter(torch.stack((torch.ones(dim), torch.zeros(dim))).float())
 
-    def forward(self, x: Tensor, x0: Tensor, value_source: Tensor | None = None) -> Tensor:
+    def forward(self, x: Tensor, x0: Tensor) -> Tensor:
         mix = self.resid_mix.to(dtype=x.dtype)
         x = mix[0][None, None, :] * x + mix[1][None, None, :] * x0
-        attn_out = self.attn(self.attn_norm(x), value_source=value_source)
+        attn_out = self.attn(self.attn_norm(x))
         x = x + self.attn_scale.to(dtype=x.dtype)[None, None, :] * attn_out
-        if self.mlp is not None:
-            x = x + self.mlp_scale.to(dtype=x.dtype)[None, None, :] * self.mlp(self.mlp_norm(x))
+        x = x + self.mlp_scale.to(dtype=x.dtype)[None, None, :] * self.mlp(self.mlp_norm(x))
         return x
 
 
@@ -706,22 +666,15 @@ class GPT(nn.Module):
         self,
         vocab_size: int,
         num_layers: int,
-        num_unique_blocks: int,
         model_dim: int,
         num_heads: int,
         num_kv_heads: int,
         mlp_mult: int,
-        cheap_block_every: int,
-        cheap_block_offset: int,
-        cheap_block_mlp_mult: int,
         bigram_hash_vocab: int,
         bigram_hash_bos_id: int,
         bigram_logit_vocab: int,
         bigram_logit_bos_id: int,
         bigram_logit_scale: float,
-        use_second_input_embed: bool,
-        use_value_embed: bool,
-        partial_key_offset_dims: int,
         tie_embeddings: bool,
         tied_embed_init_std: float,
         logit_softcap: float,
@@ -739,20 +692,12 @@ class GPT(nn.Module):
         self.bigram_hash_vocab = bigram_hash_vocab
         self.bigram_hash_bos_id = bigram_hash_bos_id
         self.bigram_emb = nn.Embedding(bigram_hash_vocab, model_dim) if bigram_hash_vocab > 0 else None
-        self.second_input_emb = nn.Embedding(vocab_size, model_dim) if use_second_input_embed else None
-        self.value_emb = nn.Embedding(vocab_size, model_dim) if use_value_embed else None
         self.bigram_logit_vocab = bigram_logit_vocab
         self.bigram_logit_bos_id = bigram_logit_bos_id
         self.bigram_logit_scale = bigram_logit_scale
         self.bigram_logit_head = (
             nn.Embedding(bigram_logit_vocab, vocab_size) if bigram_logit_vocab > 0 else None
         )
-        if num_unique_blocks <= 0:
-            num_unique_blocks = num_layers
-        if num_unique_blocks > num_layers:
-            raise ValueError(f"num_unique_blocks must be <= num_layers, got {num_unique_blocks} > {num_layers}")
-        self.num_layers = num_layers
-        self.num_unique_blocks = num_unique_blocks
         self.num_encoder_layers = num_layers // 2
         self.num_decoder_layers = num_layers - self.num_encoder_layers
         self.num_skip_weights = min(self.num_encoder_layers, self.num_decoder_layers)
@@ -763,12 +708,11 @@ class GPT(nn.Module):
                     model_dim,
                     num_heads,
                     num_kv_heads,
-                    block_mlp_mult(i, mlp_mult, cheap_block_every, cheap_block_offset, cheap_block_mlp_mult),
+                    mlp_mult,
                     rope_base,
                     qk_gain_init,
-                    partial_key_offset_dims,
                 )
-                for i in range(num_unique_blocks)
+                for i in range(num_layers)
             ]
         )
         self.final_norm = RMSNorm()
@@ -782,10 +726,6 @@ class GPT(nn.Module):
             nn.init.normal_(self.tok_emb.weight, mean=0.0, std=self.tied_embed_init_std)
         if self.bigram_emb is not None:
             nn.init.normal_(self.bigram_emb.weight, mean=0.0, std=self.tied_embed_init_std)
-        if self.second_input_emb is not None:
-            nn.init.normal_(self.second_input_emb.weight, mean=0.0, std=self.tied_embed_init_std)
-        if self.value_emb is not None:
-            nn.init.normal_(self.value_emb.weight, mean=0.0, std=self.tied_embed_init_std)
         if self.bigram_logit_head is not None:
             nn.init.zeros_(self.bigram_logit_head.weight)
         for module in self.modules():
@@ -804,24 +744,21 @@ class GPT(nn.Module):
 
     def forward(self, input_ids: Tensor, target_ids: Tensor) -> Tensor:
         x = self.tok_emb(input_ids)
-        if self.second_input_emb is not None:
-            x = x + self.second_input_emb(input_ids).to(dtype=x.dtype)
         if self.bigram_emb is not None:
             bigram_ids = self._hashed_bigram_ids(input_ids, self.bigram_hash_bos_id, self.bigram_hash_vocab)
             x = x + self.bigram_emb(bigram_ids).to(dtype=x.dtype)
         x = F.rms_norm(x, (x.size(-1),))
         x0 = x
-        value_source = self.value_emb(input_ids).to(dtype=x.dtype) if self.value_emb is not None else None
         skips: list[Tensor] = []
 
         # First half stores skips; second half reuses them in reverse order.
         for i in range(self.num_encoder_layers):
-            x = self.blocks[i % self.num_unique_blocks](x, x0, value_source=value_source)
+            x = self.blocks[i](x, x0)
             skips.append(x)
         for i in range(self.num_decoder_layers):
             if skips:
                 x = x + self.skip_weights[i].to(dtype=x.dtype)[None, None, :] * skips.pop()
-            x = self.blocks[(self.num_encoder_layers + i) % self.num_unique_blocks](x, x0, value_source=value_source)
+            x = self.blocks[self.num_encoder_layers + i](x, x0)
 
         x = self.final_norm(x).reshape(-1, x.size(-1))
         targets = target_ids.reshape(-1)
@@ -962,22 +899,15 @@ def main() -> None:
     base_model = GPT(
         vocab_size=args.vocab_size,
         num_layers=args.num_layers,
-        num_unique_blocks=args.num_unique_blocks,
         model_dim=args.model_dim,
         num_heads=args.num_heads,
         num_kv_heads=args.num_kv_heads,
         mlp_mult=args.mlp_mult,
-        cheap_block_every=args.cheap_block_every,
-        cheap_block_offset=args.cheap_block_offset,
-        cheap_block_mlp_mult=args.cheap_block_mlp_mult,
         bigram_hash_vocab=args.bigram_hash_vocab,
         bigram_hash_bos_id=args.bigram_hash_bos_id,
         bigram_logit_vocab=args.bigram_logit_vocab,
         bigram_logit_bos_id=args.bigram_logit_bos_id,
         bigram_logit_scale=args.bigram_logit_scale,
-        use_second_input_embed=args.use_second_input_embed,
-        use_value_embed=args.use_value_embed,
-        partial_key_offset_dims=args.partial_key_offset_dims,
         tie_embeddings=args.tie_embeddings,
         tied_embed_init_std=args.tied_embed_init_std,
         logit_softcap=args.logit_softcap,
@@ -1013,10 +943,6 @@ def main() -> None:
     token_params = [base_model.tok_emb.weight]
     if base_model.bigram_emb is not None:
         token_params.append(base_model.bigram_emb.weight)
-    if base_model.second_input_emb is not None:
-        token_params.append(base_model.second_input_emb.weight)
-    if base_model.value_emb is not None:
-        token_params.append(base_model.value_emb.weight)
     if base_model.bigram_logit_head is not None:
         token_params.append(base_model.bigram_logit_head.weight)
     optimizer_tok = torch.optim.Adam(
@@ -1060,15 +986,6 @@ def main() -> None:
         f"math={attn_backend == 'math'}"
     )
     log0(f"attention_mode:gqa num_heads:{args.num_heads} num_kv_heads:{args.num_kv_heads}")
-    log0(
-        f"model_extras:unique_blocks:{base_model.num_unique_blocks} "
-        f"cheap_block_every:{args.cheap_block_every} "
-        f"cheap_block_offset:{args.cheap_block_offset} "
-        f"cheap_block_mlp_mult:{args.cheap_block_mlp_mult} "
-        f"pko_dims:{args.partial_key_offset_dims} "
-        f"value_embed:{args.use_value_embed} "
-        f"second_input_embed:{args.use_second_input_embed}"
-    )
     if args.bigram_hash_vocab > 0:
         log0(f"bigram_hash:enabled vocab:{args.bigram_hash_vocab} bos_id:{args.bigram_hash_bos_id}")
     if args.bigram_logit_vocab > 0:

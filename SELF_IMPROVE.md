@@ -15,6 +15,10 @@ This document applies to both local iteration and remote H100 runs. The only dif
 - `train_gpt_mlx.py` for local MLX experiments
 - `train_gpt.py` for CUDA / H100 experiments
 
+For local testing, use exactly `600` training steps by default.
+
+Treat `ITERATIONS=600` as the fixed local comparison budget that stands in for the contest’s fixed wallclock budget.
+
 ## Core Rule
 
 Every loop must produce `10` concrete hypotheses derived from prior evidence.
@@ -205,6 +209,13 @@ That file should:
 - set `set -euo pipefail`
 - define the full command
 - use the copied trainer in the experiment folder, not the repo root
+
+If the experiment is local:
+
+- set `ITERATIONS=600`
+- keep `ITERATIONS` fixed across the loop unless the entire loop is explicitly a step-scaling study
+- treat non-`600` local runs as exploratory, not as default comparison anchors
+- do not compare a `900` or `1200` step run directly against the standard `600`-step loop frontier without labeling that comparison as exploratory
 
 Example:
 
