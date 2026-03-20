@@ -309,3 +309,71 @@ Single-H100 candidate pack that ports the strongest local `PKO32`/lexical/depth 
 | 8 | `loop_07/08_pko64_shared3` | Quality/bytes hybrid | Scaffolded | `loop07_exp08_pko64_shared3` | strongest shared-depth hybrid on H100 |
 | 9 | `loop_07/09_pko32_altcheap_value` | Lower-risk contender | Scaffolded | `loop07_exp09_pko32_altcheap_value` | half-head PKO version of the best local analog |
 | 10 | `loop_07/10_pko64_lexical_untied` | Aggressive contender | Scaffolded | `loop07_exp10_pko64_lexical_untied` | highest-upside untied lexical PKO candidate |
+
+## Loop 08
+
+Research-backed moonshot local loop built around the `loop_06` frontier and grounded in Primer, talking-heads, persistent memory, and related architectural papers while keeping `ITERATIONS=600` fixed.
+
+| Rank | Experiment Folder | Scope | Status | Run ID | Result |
+|----:|-------------------|-------|--------|--------|--------|
+| 1 | `loop_08/01_primer3_best` | Attention moonshot | Completed | `loop08_exp01_primer3_best` | `val_bpb 1.91259716`, `1604166 bytes`, strong Primer win over the prior frontier |
+| 2 | `loop_08/02_primer5_best` | Attention moonshot | Completed | `loop08_exp02_primer5_best` | `val_bpb 1.91378580`, `1612248 bytes`, slightly behind the best overall but better than Primer k=3 in its first clean run |
+| 3 | `loop_08/03_talking_heads_best` | Attention moonshot | Completed | `loop08_exp03_talking_heads_best` | `val_bpb 1.91089170`, `1594025 bytes`, strong quality result but with a severe runtime penalty |
+| 4 | `loop_08/04_persistent_memory8_best` | Memory moonshot | Completed | `loop08_exp04_persistent_memory8_best` | `val_bpb 1.91069757`, `1627212 bytes`, strong win with a much better speed profile than talking-heads |
+| 5 | `loop_08/05_persistent_memory16_best` | Memory moonshot | Completed | `loop08_exp05_persistent_memory16_best` | `val_bpb 1.90753035`, `1658295 bytes`, new best fixed-600 local result |
+| 6 | `loop_08/06_hyperconnections_best` | Residual moonshot | Completed | `loop08_exp06_hyperconnections_best` | `val_bpb 1.92536860`, `1596691 bytes`, near-anchor quality but not a real improvement |
+| 7 | `loop_08/07_swiglu_best` | MLP moonshot | Completed | `loop08_exp07_swiglu_best` | `val_bpb 1.92762046`, `1602107 bytes`, budget-matched SwiGLU regressed |
+| 8 | `loop_08/08_delight_schedule8` | Depth-allocation moonshot | Completed | `loop08_exp08_delight_schedule8` | `val_bpb 1.92686165`, `1966189 bytes`, more complex uneven depth lost to the simpler altcheap rule |
+| 9 | `loop_08/09_persistent8_shared3` | Quality/bytes hybrid | Completed | `loop08_exp09_persistent8_shared3` | `val_bpb 1.94899990`, `964489 bytes`, best size-aware moonshot in this loop |
+| 10 | `loop_08/10_primer3_shared3` | Quality/bytes hybrid | Completed | `loop08_exp10_primer3_shared3` | `val_bpb 1.95657297`, `958689 bytes`, weaker than the shared-depth memory hybrid |
+
+## Loop 12
+
+Next single-H100 remote loop built from the strongest portable local ideas and the best proven remote schedule, while avoiding the unsupported local-only features and the old `altcheap`-driven DDP failure mode.
+
+| Rank | Experiment Folder | Scope | Status | Run ID | Focus |
+|----:|-------------------|-------|--------|--------|-------|
+| 1 | `loop_12/01_sched_anchor_repro` | Remote anchor | Scaffolded | `loop12_exp01_sched_anchor_repro` | reproduce the best known single-H100 schedule |
+| 2 | `loop_12/02_pko32_bigram` | Lower-risk port | Scaffolded | `loop12_exp02_pko32_bigram` | safest PKO + lexical transfer |
+| 3 | `loop_12/03_pko32_bigram_value` | Main contender | Scaffolded | `loop12_exp03_pko32_bigram_value` | strongest simple transferable compound |
+| 4 | `loop_12/04_pko32_bigram_value_secondinput` | Lexical compound | Scaffolded | `loop12_exp04_pko32_bigram_value_secondinput` | full lexical stack on PKO32 |
+| 5 | `loop_12/05_pko32_bigram_value_batch655360` | Systems compound | Scaffolded | `loop12_exp05_pko32_bigram_value_batch655360` | larger-batch test on the main contender |
+| 6 | `loop_12/06_pko32_bigram_value_batch786432` | Systems compound | Scaffolded | `loop12_exp06_pko32_bigram_value_batch786432` | more aggressive larger-batch test |
+| 7 | `loop_12/07_pko32_bigram_value_warmdown180` | Schedule compound | Scaffolded | `loop12_exp07_pko32_bigram_value_warmdown180` | longer cooldown on the main contender |
+| 8 | `loop_12/08_pko32_bigram_value_untied` | Output-head test | Scaffolded | `loop12_exp08_pko32_bigram_value_untied` | revisit untied head in a cleaner context |
+| 9 | `loop_12/09_pko64_bigram_value_noalt` | Width test | Scaffolded | `loop12_exp09_pko64_bigram_value_noalt` | higher-risk PKO width test without altcheap |
+| 10 | `loop_12/10_shared3_pko32_bigram` | Quality/bytes hybrid | Scaffolded | `loop12_exp10_shared3_pko32_bigram` | strongest shared-depth remote hybrid |
+
+## Loop 09
+
+Persistent-memory follow-up loop that treats `loop08_exp05_persistent_memory16_best` as the new anchor and tests memory scaling plus compounds with Primer, talking-heads, and shared depth.
+
+| Rank | Experiment Folder | Scope | Status | Run ID | Result |
+|----:|-------------------|-------|--------|--------|--------|
+| 1 | `loop_09/01_pmem16_anchor` | Repro anchor | Completed | `loop09_exp01_pmem16_anchor` | `val_bpb 1.90786090`, `1657104 bytes`, clean reproduction of the loop-08 winner |
+| 2 | `loop_09/02_pmem24_best` | Memory sweep | Completed | `loop09_exp02_pmem24_best` | `val_bpb 1.90110292`, `1687560 bytes`, memory sweep improved at 24 |
+| 3 | `loop_09/03_pmem32_best` | Memory sweep | Completed | `loop09_exp03_pmem32_best` | `val_bpb 1.90630486`, `1717935 bytes`, sweep regressed again at 32 |
+| 4 | `loop_09/04_pmem16_primer5` | Attention compound | Completed | `loop09_exp04_pmem16_primer5` | `val_bpb 1.89522831`, `1676633 bytes`, strong compound win |
+| 5 | `loop_09/05_pmem24_primer5` | Attention compound | Completed | `loop09_exp05_pmem24_primer5` | `val_bpb 1.89137299`, `1707973 bytes`, new best fixed-600 local result |
+| 6 | `loop_09/06_pmem16_no_value` | Lexical ablation | Completed | `loop09_exp06_pmem16_no_value` | `val_bpb 1.92796215`, `1539184 bytes`, confirms value embedding still matters |
+| 7 | `loop_09/07_pmem16_shared3` | Quality/bytes hybrid | Completed | `loop09_exp07_pmem16_shared3` | `val_bpb 1.94903190`, `975626 bytes`, still bytes-efficient but behind on quality |
+| 8 | `loop_09/08_pmem16_primer5_shared3` | Quality/bytes hybrid | Completed | `loop09_exp08_pmem16_primer5_shared3` | `val_bpb 1.94156468`, `983048 bytes`, best shared-depth result in the loop |
+| 9 | `loop_09/09_pmem16_talking_heads` | Attention compound | Completed | `loop09_exp09_pmem16_talking_heads` | `val_bpb 1.89217451`, `1656443 bytes`, very strong quality but severe runtime cost |
+| 10 | `loop_09/10_pmem16_no_bigram` | Lexical ablation | Completed | `loop09_exp10_pmem16_no_bigram` | `val_bpb 1.92763803`, `1406309 bytes`, confirms bigram hash still matters |
+
+## Loop 10
+
+Refinement loop around `pmem24 + primer5`, focused on finding the local peak more precisely and testing one size-aware hybrid, one lexical add-on, one altcheap isolation, and one larger-batch systems candidate.
+
+| Rank | Experiment Folder | Scope | Status | Run ID | Focus |
+|----:|-------------------|-------|--------|--------|-------|
+| 1 | `loop_10/01_pmem24_primer5_anchor` | Repro anchor | Scaffolded | `loop10_exp01_pmem24_primer5_anchor` | verify the new loop_09 winner before refining |
+| 2 | `loop_10/02_pmem20_primer5` | Memory refinement | Scaffolded | `loop10_exp02_pmem20_primer5` | test whether the memory peak sits below 24 |
+| 3 | `loop_10/03_pmem28_primer5` | Memory refinement | Scaffolded | `loop10_exp03_pmem28_primer5` | test whether the memory peak sits above 24 |
+| 4 | `loop_10/04_pmem24_primer3` | Primer refinement | Scaffolded | `loop10_exp04_pmem24_primer3` | shorter local kernel on the best stack |
+| 5 | `loop_10/05_pmem24_primer7` | Primer refinement | Scaffolded | `loop10_exp05_pmem24_primer7` | longer local kernel on the best stack |
+| 6 | `loop_10/06_pmem24_primer5_talking_heads` | Expensive quality shot | Scaffolded | `loop10_exp06_pmem24_primer5_talking_heads` | see if talking-heads compounds with the new frontier |
+| 7 | `loop_10/07_pmem24_primer5_shared3` | Quality/bytes hybrid | Scaffolded | `loop10_exp07_pmem24_primer5_shared3` | push the shared-depth hybrid with the new best stack |
+| 8 | `loop_10/08_pmem24_primer5_second_input` | Lexical add-on | Scaffolded | `loop10_exp08_pmem24_primer5_second_input` | retry second-input on the stronger memory+Primer regime |
+| 9 | `loop_10/09_pmem24_primer5_no_altcheap` | Isolation | Scaffolded | `loop10_exp09_pmem24_primer5_no_altcheap` | test whether altcheap is still helping |
+| 10 | `loop_10/10_pmem24_primer5_batch24576` | Systems | Scaffolded | `loop10_exp10_pmem24_primer5_batch24576` | test a larger fixed-600 local batch |
